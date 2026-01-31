@@ -2,16 +2,16 @@ import { initializeApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
-// Replace with your Firebase project configuration
-// Get this from Firebase Console > Project Settings > General > Your apps
+// Firebase configuration loaded from environment variables
+// Set these in .env.local file (already in .gitignore)
 const firebaseConfig = {
-  apiKey: "AIzaSyD6hZ_ZT8unlekIkqBza2EC_ZF5EvtDyDY",
-  authDomain: "mtgmanager-1b712.firebaseapp.com",
-  projectId: "mtgmanager-1b712",
-  storageBucket: "mtgmanager-1b712.firebasestorage.app",
-  messagingSenderId: "1032758501972",
-  appId: "1:1032758501972:web:4ece50fd954c747cb7c3c1",
-  measurementId: "G-6DJEC5WD9D"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID
 };
 
 // Initialize Firebase
