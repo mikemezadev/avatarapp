@@ -204,6 +204,17 @@ const CardPreviewOverlay: React.FC = () => {
 
 const Content: React.FC = () => {
     const { loading, activeView, activeUniverse } = useCollection();
+    const { loading: authLoading } = useAuth();
+
+    // Show loading while auth initializes
+    if (authLoading) {
+        return (
+            <div className="h-screen flex flex-col items-center justify-center bg-gray-50 text-gray-400">
+                <i className="fa-solid fa-circle-notch fa-spin text-4xl text-primary mb-4"></i>
+                <p>Initializing...</p>
+            </div>
+        );
+    }
 
     // If no universe selected, show welcome screen
     if (!activeUniverse) {

@@ -4,6 +4,8 @@ import { Card, Deck, CollectionState, CustomDeck, ViewState, LibraryFilters, Uni
 import { fetchAllCards, fetchDecks } from '../services/dataService';
 import { useAuth } from './AuthContext';
 import { UNIVERSES } from '../constants';
+import { doc, setDoc, getDoc, onSnapshot } from 'firebase/firestore';
+import { db } from '../firebase.config';
 
 export const DEFAULT_FILTERS: LibraryFilters = {
   search: '',
@@ -114,7 +116,7 @@ export const CollectionProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     initData();
   }, [activeUniverse]);
 
-  // 2. Load User Collection (Universe + User specific)
+  // 2. Load User Collection (Universe + User specific) with Firebase sync
   useEffect(() => {
     if (!activeUniverse) {
         setCollection(EMPTY_COLLECTION);
@@ -122,44 +124,95 @@ export const CollectionProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     }
 
     const userId = user ? user.id : 'guest';
-    const storageKey = `${activeUniverse}_collection_${userId}`;
-    const saved = localStorage.getItem(storageKey);
     
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setCollection({ 
-            cards: parsed.cards || {}, 
-            foilCards: parsed.foilCards || {},
-            decks: parsed.decks || {}, 
-            customDecks: parsed.customDecks || [] 
-        });
-      } catch (e) {
-        console.error("Error parsing collection", e);
+    // For guest users, use localStorage
+    if (userId === 'guest') {
+      const storageKey = `${activeUniverse}_collection_guest`;
+      const saved = localStorage.getItem(storageKey);
+      
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setCollection({ 
+              cards: parsed.cards || {}, 
+              foilCards: parsed.foilCards || {},
+              decks: parsed.decks || {}, 
+              customDecks: parsed.customDecks || [] 
+          });
+        } catch (e) {
+          console.error("Error parsing collection", e);
+          setCollection(EMPTY_COLLECTION);
+        }
+      } else {
         setCollection(EMPTY_COLLECTION);
       }
-    } else {
-      // Start fresh for new combination
-      setCollection(EMPTY_COLLECTION);
+      
+      setLibraryFilters(DEFAULT_FILTERS);
+      setActiveView('library');
+      setIsBinderMode(false);
+      return;
     }
+
+    // For authenticated users, sync with Firestore
+    const collectionDocRef = doc(db, 'collections', `${userId}_${activeUniverse}`);
+    
+    // Set up real-time listener
+    const unsubscribe = onSnapshot(collectionDocRef, (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setCollection({
+          cards: data.cards || {},
+          foilCards: data.foilCards || {},
+          decks: data.decks || {},
+          customDecks: data.customDecks || []
+        });
+      } else {
+        // Initialize empty collection
+        setCollection(EMPTY_COLLECTION);
+      }
+    }, (error) => {
+      console.error("Error loading collection from Firestore:", error);
+      setCollection(EMPTY_COLLECTION);
+    });
     
     // Reset filters when switching
     setLibraryFilters(DEFAULT_FILTERS);
     setActiveView('library');
     setIsBinderMode(false);
+
+    // Cleanup listener on unmount or when dependencies change
+    return () => unsubscribe();
   }, [user, activeUniverse]);
 
-  // 3. Save Collection when it changes
+  // 3. Save Collection when it changes (to Firestore for authenticated users)
   useEffect(() => {
-    if (!activeUniverse) return;
+    if (!activeUniverse || loading) return;
     
     const userId = user ? user.id : 'guest';
-    const storageKey = `${activeUniverse}_collection_${userId}`;
     
-    // Debounce slightly or just save on every change (localstorage is fast enough)
-    if (!loading) {
-       localStorage.setItem(storageKey, JSON.stringify(collection));
+    // For guest users, use localStorage
+    if (userId === 'guest') {
+      const storageKey = `${activeUniverse}_collection_guest`;
+      localStorage.setItem(storageKey, JSON.stringify(collection));
+      return;
     }
+
+    // For authenticated users, save to Firestore
+    const collectionDocRef = doc(db, 'collections', `${userId}_${activeUniverse}`);
+    
+    // Debounced save to Firestore
+    const timeoutId = setTimeout(async () => {
+      try {
+        await setDoc(collectionDocRef, {
+          ...collection,
+          lastUpdated: Date.now()
+        });
+      } catch (error) {
+        console.error("Error saving collection to Firestore:", error);
+      }
+    }, 1000); // 1 second debounce
+
+    return () => clearTimeout(timeoutId);
   }, [collection, user, loading, activeUniverse]);
 
   const updateCardQuantity = (cardId: string, delta: number, isFoil: boolean = false) => {

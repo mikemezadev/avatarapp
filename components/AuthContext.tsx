@@ -1,6 +1,16 @@
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
+import { 
+  createUserWithEmailAndPassword, 
+  signInWithEmailAndPassword, 
+  signOut, 
+  onAuthStateChanged,
+  updateProfile,
+  User as FirebaseUser
+} from 'firebase/auth';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { auth, db } from '../firebase.config';
 
 interface AuthContextType {
   user: User | null;
@@ -8,91 +18,118 @@ interface AuthContextType {
   signup: (username: string, email: string, password: string) => Promise<boolean>;
   logout: () => void;
   isAuthenticated: boolean;
+  loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-// Helper to simulate a database delay
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  // Load session on mount
+  // Listen for auth state changes
   useEffect(() => {
-    const savedUser = localStorage.getItem('atla_session_user');
-    if (savedUser) {
-      setUser(JSON.parse(savedUser));
-    }
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        // Fetch additional user data from Firestore
+        const userDocRef = doc(db, 'users', firebaseUser.uid);
+        const userDoc = await getDoc(userDocRef);
+        
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          setUser({
+            id: firebaseUser.uid,
+            username: userData.username || firebaseUser.displayName || 'User',
+            email: firebaseUser.email || ''
+          });
+        } else {
+          // Fallback if no Firestore document
+          setUser({
+            id: firebaseUser.uid,
+            username: firebaseUser.displayName || 'User',
+            email: firebaseUser.email || ''
+          });
+        }
+      } else {
+        setUser(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const login = async (identifier: string, password: string): Promise<boolean> => {
-    await delay(500); // Simulate network request
-    
-    const usersStr = localStorage.getItem('atla_users_db');
-    const users = usersStr ? JSON.parse(usersStr) : [];
-    
-    // Find user by username OR email
-    const foundUser = users.find((u: any) => 
-      (u.username === identifier || u.email === identifier) && u.password === password
-    );
-
-    if (foundUser) {
-      const userObj: User = {
-        id: foundUser.id,
-        username: foundUser.username,
-        email: foundUser.email
-      };
-      setUser(userObj);
-      localStorage.setItem('atla_session_user', JSON.stringify(userObj));
+    try {
+      // Firebase only supports email login, so identifier must be email
+      const userCredential = await signInWithEmailAndPassword(auth, identifier, password);
+      const firebaseUser = userCredential.user;
+      
+      // Fetch user data from Firestore to get the username
+      const userDocRef = doc(db, 'users', firebaseUser.uid);
+      const userDoc = await getDoc(userDocRef);
+      
+      if (userDoc.exists()) {
+        const userData = userDoc.data();
+        setUser({
+          id: firebaseUser.uid,
+          username: userData.username || firebaseUser.displayName || 'User',
+          email: firebaseUser.email || ''
+        });
+      }
+      
       return true;
+    } catch (error: any) {
+      console.error('Login error:', error.message);
+      return false;
     }
-    
-    return false;
   };
 
   const signup = async (username: string, email: string, password: string): Promise<boolean> => {
-    await delay(500); // Simulate network request
+    try {
+      // Create Firebase user
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const firebaseUser = userCredential.user;
 
-    const usersStr = localStorage.getItem('atla_users_db');
-    const users = usersStr ? JSON.parse(usersStr) : [];
+      // Update display name
+      await updateProfile(firebaseUser, {
+        displayName: username
+      });
 
-    // Check if exists
-    if (users.find((u: any) => u.username === username || u.email === email)) {
-      return false; // User exists
+      // Store additional user data in Firestore
+      await setDoc(doc(db, 'users', firebaseUser.uid), {
+        username,
+        email,
+        createdAt: Date.now()
+      });
+
+      // Set user state immediately after signup
+      setUser({
+        id: firebaseUser.uid,
+        username: username,
+        email: email
+      });
+
+      return true;
+    } catch (error: any) {
+      console.error('Signup error:', error.message);
+      return false;
     }
-
-    const newUser = {
-      id: crypto.randomUUID(),
-      username,
-      email,
-      password // Note: In a real app, never store plain text passwords!
-    };
-
-    users.push(newUser);
-    localStorage.setItem('atla_users_db', JSON.stringify(users));
-
-    // Auto login after signup
-    const userObj: User = {
-      id: newUser.id,
-      username: newUser.username,
-      email: newUser.email
-    };
-    setUser(userObj);
-    localStorage.setItem('atla_session_user', JSON.stringify(userObj));
-    
-    return true;
   };
 
-  const logout = () => {
-    setUser(null);
-    localStorage.removeItem('atla_session_user');
-    // We reload the page to ensure all collection states are reset cleanly
-    window.location.reload();
+  const logout = async () => {
+    try {
+      await signOut(auth);
+      setUser(null);
+      // Reload to reset collection state
+      window.location.reload();
+    } catch (error: any) {
+      console.error('Logout error:', error.message);
+    }
   };
 
   return (
-    <AuthContext.Provider value={{ user, login, signup, logout, isAuthenticated: !!user }}>
+    <AuthContext.Provider value={{ user, login, signup, logout, isAuthenticated: !!user, loading }}>
       {children}
     </AuthContext.Provider>
   );
